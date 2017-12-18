@@ -37,11 +37,11 @@
       digital_ocean:
         api_token: "{{ token }}"
         command: droplet
-        image_id: debian-8-x64
+        image_id: "{{ image }}"
         name: "{{ name }}"
         private_networking: yes
-        region_id: nyc3
-        size_id: 512mb
+        region_id: "{{ region }}"
+        size_id: "{{ size }}"
         ssh_key_ids: "{{ sshkey.ssh_key.id }}"
         state: present
         unique_name: yes
