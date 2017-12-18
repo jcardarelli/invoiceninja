@@ -1,0 +1,112 @@
+# invoice_ninja.yml
+--- 
+########################################################
+# Play 1 - Provision Digital Ocean VM from localhost
+########################################################
+- hosts: localhost
+
+  pre_tasks:
+    - name: Include main variables from file
+      include_vars: vars/main.yml
+
+    - name: Include digital ocean variables from file
+      include_vars: vars/digitalocean.yml
+
+    - name: Create ssh directory for droplet
+      file:
+        path: "{{ ssh_path }}"
+        state: directory
+        mode: 0755
+
+    - name: Generating a new SSH key pair
+      shell: ssh-keygen -b 2048 -t rsa -f "{{ private_key }}" -q -N ""
+      become: true
+      ignore_errors: yes
+
+    - name: Ensure SSH key exists at DigitalOcean
+      digital_ocean:
+        state: present
+        command: ssh
+        name: "{{ name }}"
+        ssh_pub_key: "{{ lookup('file', '{{ public_key }}') }}"
+        api_token: "{{ token }}"
+      register: sshkey
+
+  tasks:
+    - name: "Create the new droplet"
+      digital_ocean:
+        api_token: "{{ token }}"
+        command: droplet
+        image_id: debian-8-x64
+        name: "{{ name }}"
+        private_networking: yes
+        region_id: nyc3
+        size_id: 512mb
+        ssh_key_ids: "{{ sshkey.ssh_key.id }}"
+        state: present
+        unique_name: yes
+        wait_timeout: 500
+      register: my_droplet
+    
+    - set_fact:
+        droplet_id: "{{ my_droplet.droplet.id }}"
+        droplet_ip_addr: "{{ my_droplet.droplet.ip_address }}"
+
+  post_tasks:
+    - name: Add "{{ name }}" to ssh config
+      become: true
+      ssh_config:
+        host: "{{ name }}" 
+        hostname: "{{ droplet_ip_addr }}" 
+        identity_file: "{{ private_key }}" 
+        port: 22 
+        state: present
+
+    - name: Add line to ssh config
+      blockinfile:
+        dest: "{{ ansible_env.HOME }}/.ssh/config"
+        block: |
+          Host {{ name }}
+          Hostname {{ droplet_ip_addr }} 
+          User root
+          IdentityFile {{ private_key }} 
+          port 22
+
+    - name: "Add new host to ansible hosts file"
+      lineinfile:
+        dest: "/etc/ansible/hosts"
+        line: "{{ name }} ansible_ssh_host={{ droplet_ip_addr }} ansible_ssh_user=root ansible_ssh_private_key_file={{ private_key }}"
+        insertafter: '\[do\]'
+
+    - name: Register the new VM host with the name "invoiceninja"
+      add_host:
+        name: "{{ droplet_ip_addr }}"
+        hostname: "{{ droplet_ip_addr }}"
+        groups: invoiceninja
+        ansible_ssh_user: root
+        ansible_ssh_private_key_file: "{{ private_key }}"
+
+    - name: accept new ssh fingerprints
+      shell: "ssh-keyscan -H {{ droplet_ip_addr }} >> ~/.ssh/known_hosts"
+
+    - name: Install pass to manage passwords (invoiceninja host calls localhost to store passwords)
+      apt:
+        name: pass
+
+
+########################################################
+# Play 2 - Install Invoice Ninja on new VM
+########################################################
+- name: "Droplet provisioning finished. Starting invoice ninja configuration for {{ name }}"
+  hosts: invoiceninja
+  become: yes
+  gather_facts: true
+
+  tasks:
+    - name: Wait for SSH banners
+      local_action: wait_for port=22 host="{{ inventory_hostname }}" search_regex="OpenSSH" delay="10"
+      become: false
+    
+    - name: Include invoice_ninja_host.yml
+      include: invoice_ninja_host.yml
+... 
