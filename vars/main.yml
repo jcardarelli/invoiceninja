@@ -1,0 +1,30 @@
+---
+
+local_user: john
+
+# Digital Ocean options
+base_dir: "/home/{{ local_user }}/sites/{{ new_name }}"
+token: "{{ lookup('file', 'token.txt') }}"
+ssh_path: "{{ base_dir }}/.ssh"
+private_key: "{{ ssh_path }}/{{ new_name }}"
+public_key: "{{ ssh_path }}/{{ new_name }}.pub"
+
+ninja:
+  root: "/var/www/{{ name }}"
+  username: ninja
+
+composer_path: /root/composer
+
+passvar:
+  usern: ninja
+  mysql_dir: "mariadb/{{ name | regex_replace('[.]', '_') }}/ninja"
+  length: 16
+
+mysqlvar:
+  mysql_dir: "mariadb/{{ name | regex_replace('[.]', '_') }}/root"
+  mysql_dir_only: "mariadb/{{ name | regex_replace('[.]', '_') }}"
+  default_root_password: ""
+  usern: root
+  dbname: invoiceninja
+
+...

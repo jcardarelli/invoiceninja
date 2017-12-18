@@ -1,0 +1,385 @@
+#---
+ ###################################################
+- name: "Starting Invoice Ninja Installation on {{ name }}"
+  debug:
+    msg: Starting prerequisite tasks
+ ###################################################
+
+- name: Include main variables from file
+  include_vars: vars/main.yml
+
+# Configure DNS A record here
+ 
+- name: Add GPG key for dot deb
+  apt_key:
+    url: "https://www.dotdeb.org/dotdeb.gpg"
+    state: present
+
+- name: "Add key for MariaDB 10.0 repo"
+  apt_key: 
+    url: "http://keyserver.ubuntu.com/pks/lookup?op=get&fingerprint=on&search=0xcbcb082a1bb943db" 
+    state: present
+
+- name: "Add  MariaDB 10.0 repo from D.O. NYC2 deb"
+  apt_repository:
+    repo: "deb [arch=amd64,i386] http://nyc2.mirrors.digitalocean.com/mariadb/repo/10.1/debian jessie main"
+    state: present
+
+- name: "Add  MariaDB 10.0 repo from D.O. NYC2 deb-src"
+  apt_repository:
+    repo: "deb-src http://nyc2.mirrors.digitalocean.com/mariadb/repo/10.1/debian jessie main"
+    state: present
+
+- name: "Add  dotdeb repo deb jessie repo"
+  apt_repository:
+    repo: deb http://packages.dotdeb.org jessie all
+    state: present
+    update_cache: yes
+           
+- name: "Add dotdeb repo deb-src"
+  apt_repository:
+    repo: deb-src http://packages.dotdeb.org jessie all
+    state: present
+
+- name: Add jessie backports repository into sources list and run apt-get update
+  apt_repository:
+    repo: deb http://ftp.debian.org/debian jessie-backports main
+    state: present
+    update_cache: yes
+
+- name: Install prerequisites for Invoice Ninja
+  apt: name={{ item }} state=present update_cache=yes
+  with_items:
+    - curl
+    - fail2ban
+    - git
+    - gnupg-agent 
+    - mariadb-server
+    - nginx
+    - openssl
+    - php7.0-cli 
+    - php7.0-curl
+    - php7.0-fpm 
+    - php7.0-gd 
+    - php7.0-gmp
+    - php7.0-mbstring 
+    - php7.0-mcrypt 
+    - php7.0-mysql
+    - php7.0-xml
+    - php7.0-zip
+    - pinentry-curses
+    - python-mysqldb
+    - python-software-properties
+    - software-properties-common
+    - tmux
+    - ufw 
+    - vim
+
+- name: enable php7 mcrypt module
+  shell: "phpenmod -v 7.0 mcrypt"
+  args:
+    creates: "/etc/php/7.0/cli/conf.d/20-mcrypt.ini"
+
+- name: pass | generate a new password for the '{{ mysqlvar.usern }}' db user and register variable
+  shell: 'pass generate -n {{ mysqlvar.mysql_dir }} {{ passvar.length }}'
+  become: yes
+  become_user: "{{ local_user }}"
+  delegate_to: localhost
+  no_log: true
+  #register: passoutput
+
+- name: Use pass to copy the '{{ mysqlvar.usern }}' password to a variable
+  shell: 'pass {{ mysqlvar.mysql_dir }}'
+  become: yes
+  become_user: "{{ local_user }}"
+  delegate_to: localhost
+  no_log: true
+  register: mysql_pw
+
+
+
+####################################################
+- debug:
+    msg: Starting MariaDB secure installation
+####################################################
+
+- name: mysql | Change root user password on first run
+  mysql_user: 
+    login_user: root
+    login_password: "{{ mysqlvar.default_root_password }}"
+    check_implicit_admin: yes
+    name: root
+    password: "{{ mysql_pw.stdout }}"
+    priv: "*.*:ALL,GRANT"
+    host: "{{ item }}"
+  with_items:
+    - "{{ name }}"
+    - 127.0.0.1
+    - ::1
+    - localhost
+
+- name: "mysql | Delete anonymous MySQL server user for {{ name }}"
+  mysql_user: 
+    login_user: root
+    login_password: '{{ mysql_pw.stdout }}'
+    check_implicit_admin: yes
+    user: ""
+    host: "{{ item }}"
+    state: "absent"
+  with_items:
+   - ""
+   - "{{ name }}"
+   - localhost
+
+- name: "mysql | remove the test database"
+  mysql_db: 
+    login_user: root 
+    login_password: "{{ mysql_pw.stdout }}" 
+    db: "test" 
+    state: "absent"
+
+
+
+####################################################
+- debug:
+    msg: Starting database creation
+####################################################
+
+- name: "mysql | Create a new database {{ mysqlvar.dbname }}"
+  mysql_db:
+    name: "{{ mysqlvar.dbname }}" 
+    login_user: root 
+    login_password: "{{ mysql_pw.stdout }}" 
+    state: present
+
+- name: pass | generate a new password for the '{{ mysqlvar.usern }}' db user and register variable
+  shell: 'pass generate -n {{ passvar.mysql_dir }} {{ passvar.length }}'
+  become: yes
+  become_user: "{{ local_user }}"
+  delegate_to: localhost
+  #no_log: true
+  #register: passoutput
+
+- name: pass | Copy the '{{ passvar.usern }}' password to a variable
+  shell: 'pass {{ passvar.mysql_dir }}'
+  become: yes
+  become_user: "{{ local_user }}"
+  delegate_to: localhost
+  register: passvar_mysql
+
+- name: debug pw for '{{ passvar.usern }}'
+  debug:
+    var: passvar_mysql
+
+- set_fact:
+    mysql_user_pw: "{{ passvar_mysql.stdout }}"
+
+- name: mysql | Create database user "{{ passvar.usern }}" with all database privileges and WITH ALL OPTION
+  mysql_user:
+    name: "{{ passvar.usern }}" 
+    password: "{{ mysql_user_pw }}" 
+    login_user: root 
+    login_password: "{{ mysql_pw.stdout }}" 
+    priv: "*.*:ALL"
+    state: present
+
+
+####################################################
+- debug:
+    msg: Installing composer
+####################################################
+- name: Create composer directory
+  file:
+    path: "{{ composer_path }}"
+    state: directory
+    mode: 0755
+
+- name: download composer
+  get_url:
+    url: https://getcomposer.org/installer
+    dest: /tmp/installer
+
+- name: install composer
+  shell: cat /tmp/installer | php -- --install-dir=/usr/local/bin
+  args:
+    creates: /usr/local/bin/composer
+
+- name: rename composer.phar to composer
+  shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
+  args:
+    creates: /usr/local/bin/composer
+
+- name: make composer executable
+  file: 
+    path: /usr/local/bin/composer
+    mode: a+x
+    state: file
+
+
+####################################################
+- debug:
+    msg: Installing invoice ninja
+####################################################
+ 
+- name: Create invoice ninja directory
+  file:
+    path: "{{ ninja.root }}"
+    state: directory
+    mode: 0755
+
+- name: clone invoice ninja from github 
+  git:
+    clone: yes
+    update: yes
+    repo: https://github.com/hillelcoren/invoice-ninja.git
+    dest: "{{ ninja.root }}"
+
+- name: "create user {{ ninja.username }}"
+  user:
+    name: "{{ ninja.username }}"
+    generate_ssh_key: yes
+    ssh_key_bits: 4096
+    ssh_key_file: .ssh/id_rsa
+
+- name: "chown {{ ninja.root }} to {{ ninja.username }}"
+  file:
+    path: "{{ ninja.root }}"
+    owner: "{{ ninja.username }}"
+    group: "{{ ninja.username }}"
+    recurse: yes
+    mode: 0755
+
+- name: composer | install dependencies
+  composer:
+    command: install
+    no_dev: yes
+    optimize_autoloader: yes
+    working_dir: "{{ wordpress.root }}"
+  become: yes
+  become_user: "{{ wordpress.username }}"
+
+
+- name: php artisan migrate database
+  command: php artisan migrate
+  args:
+    chdir: "{{ ninja.root }}"
+
+- name: php artisan seed database
+  command: php artisan db:seed
+  args:
+    chdir: "{{ ninja.root }}"
+
+- name: copy .env.example to .env
+  command: cp "{{ ninja.root }}/.env.example" "{{ ninja.root }}/.env"
+
+- name: php artisan generate new application key
+  shell: php artisan key:generate
+  args:
+    chdir: "{{ ninja.root }}"
+  register: ninja_key
+
+- name: get artisan key from stdout
+  set_fact:
+    artisan_key: "{{ ninja_key.stdout }}"
+
+- name: "Create {{ ninja.root }}/app/storage directory"
+  file:
+    path: "{{ ninja.root }}/app/storage"
+    state: directory
+    owner: "{{ ninja.username }}"
+    group: "{{ ninja.username }}"
+    mode: 0777
+
+- debug:
+    msg: ####################################################
+         Configuring templates
+         ####################################################
+
+- name: Copy .bashrc from template
+  template:
+    src: templates/bashrc.j2
+    dest: "/root/.bashrc"
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Copy .vimrc from template
+  template:
+    src: templates/vimrc.j2
+    dest: "/root/.vimrc"
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Copy .tmux.conf from template
+  template:
+    src: templates/tmux.conf.j2
+    dest: "/root/.tmux.conf"
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Configure nginx sites available from template
+  template:
+    src: templates/nginx-site.conf.j2
+    dest: "/etc/nginx/sites-available/{{ name }}.conf"
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Configure php7.0-fpm pool
+  template:
+    src: templates/php-fpm-pool.j2
+    dest: "/etc/php/7.0/fpm/pool.d/{{ name }}.conf"
+    owner: www-data
+    group: www-data
+    mode: 0644
+
+- name: Copy Invoice Ninja app.php template
+  template:
+    src: templates/app.php.j2
+    dest: "{{ ninja.root }}/config/app.php"
+    owner: www-data
+    group: www-data
+    mode: 0644
+
+- name: Copy Invoice Ninja template
+  template:
+    src: templates/database.php.j2
+    dest: "{{ ninja.root }}/config/database.php"
+    owner: www-data
+    group: www-data
+    mode: 0644
+
+- name: "chown recursively {{ ninja.root }}"
+  file: 
+    recurse: yes
+    path: "{{ ninja.root }}"
+    owner: www-data
+    group: www-data
+
+- name: "chown /etc/php/7.0/fpm/pool.d/{{ name }}.conf"
+  file: 
+    path: "/etc/php/7.0/fpm/pool.d/{{ name }}.conf"
+    owner: "www-data"
+    group: "www-data"
+
+
+- name: Enable nginx site
+  file:
+    src: /etc/nginx/sites-available/{{ name }}.conf 
+    dest: /etc/nginx/sites-enabled/{{ name }}.conf
+    owner: root
+    group: root
+    state: link
+
+- name: restart nginx
+  service: name=nginx state=restarted enabled=yes     
+
+- name: 'restart php7.0-fpm'
+  service: 
+    name: 'php7.0-fpm' 
+    state: restarted 
+    enabled: yes     
+
+...
