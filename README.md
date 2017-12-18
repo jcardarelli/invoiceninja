@@ -13,5 +13,5 @@ Create a file containing the Digital Ocean API token
 
 ## Usage
 ```
-ansible-playbook invoice_ninja.yml --ask-become-pass --extra-vars='{name: fqdn.site.com, size: 1gb}'
+ansible-playbook invoice_ninja.yml --ask-become-pass --extra-vars='{name: fqdn.site.com, size: 1gb, image: debian-8-x64, region: nyc3}'
 ```
