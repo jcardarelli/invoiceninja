@@ -9,3 +9,9 @@ Ansible playbook to install Invoice Ninja on a new Digital Ocean VM
 
 ### token.txt
 Create a file containing the Digital Ocean API token
+
+
+## Usage
+```
+ansible-playbook invoice_ninja.yml --ask-become-pass --extra-vars='{name: fqdn.site.com, size: 1gb}'
+```
